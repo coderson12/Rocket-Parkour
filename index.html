@@ -2,38 +2,64 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>3D Rocket Jump Game</title>
+  <title>3D Rocket Jump – Levels + Editor</title>
   <style>
     html, body {
       margin: 0;
       padding: 0;
       overflow: hidden;
       background: #000;
+      font-family: sans-serif;
     }
     canvas {
       display: block;
     }
-    #info {
+    #ui {
       position: fixed;
       top: 10px;
       left: 10px;
       color: #fff;
-      font-family: sans-serif;
-      font-size: 14px;
-      background: rgba(0,0,0,0.4);
-      padding: 6px 10px;
+      font-size: 13px;
+      background: rgba(0,0,0,0.6);
+      padding: 8px 10px;
       border-radius: 4px;
       z-index: 10;
+      max-width: 260px;
+    }
+    #ui button, #ui select {
+      margin: 2px 0;
+      font-size: 12px;
+    }
+    #ui .row {
+      margin-top: 4px;
     }
   </style>
 </head>
 <body>
-<div id="info">
-  Aim with mouse, click to rocket jump.<br>
-  Reach the green wall to win. No WASD.
+<div id="ui">
+  <div><b>3D Rocket Jump</b></div>
+  <div>Click to rocket jump. No WASD.</div>
+  <div>Reach the green goal wall.</div>
+  <div class="row">
+    <b>Mode:</b>
+    <button id="playModeBtn">Play</button>
+    <button id="editModeBtn">Edit</button>
+  </div>
+  <div class="row">
+    <b>Level:</b>
+    <select id="levelSelect"></select>
+    <button id="loadLevelBtn">Load</button>
+  </div>
+  <div class="row">
+    <b>Editor:</b><br>
+    Left click: place building<br>
+    Right click: remove building<br>
+    Shift+click: place goal<br>
+    <button id="saveLevelBtn">Save to slot</button>
+  </div>
 </div>
-<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
 
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
 <script>
 let scene, camera, renderer;
 let player, playerRadius = 1;
@@ -44,9 +70,53 @@ let maxSpeed = 80;
 
 let raycaster = new THREE.Raycaster();
 let mouse = new THREE.Vector2();
+let mouseWorld = new THREE.Vector3();
+
 let buildings = [];
-let goalWall;
+let goalWall = null;
+
 let clock = new THREE.Clock();
+let mode = "play"; // "play" or "edit"
+let currentLevelIndex = 0;
+
+// 10 levels (positions in world space)
+let levels = [
+  { buildings: [ {x:10,y:2,z:0}, {x:20,y:3,z:5} ], goal:{x:40,y:10,z:0} },
+  { buildings: [ {x:10,y:2,z:-5}, {x:20,y:3,z:0}, {x:30,y:4,z:5} ], goal:{x:50,y:10,z:0} },
+  { buildings: [ {x:15,y:3,z:-6}, {x:25,y:4,z:2}, {x:35,y:5,z:-3} ], goal:{x:60,y:10,z:0} },
+  { buildings: [ {x:10,y:2,z:5}, {x:20,y:3,z:-5}, {x:30,y:4,z:0}, {x:40,y:5,z:4} ], goal:{x:70,y:10,z:0} },
+  { buildings: [ {x:12,y:3,z:-4}, {x:22,y:3,z:4}, {x:32,y:4,z:-2}, {x:42,y:5,z:2} ], goal:{x:80,y:10,z:0} },
+  { buildings: [ {x:10,y:2,z:0}, {x:20,y:3,z:5}, {x:30,y:4,z:-5}, {x:40,y:5,z:0}, {x:50,y:6,z:3} ], goal:{x:90,y:10,z:0} },
+  { buildings: [ {x:15,y:3,z:-6}, {x:25,y:4,z:6}, {x:35,y:5,z:-4}, {x:45,y:6,z:4} ], goal:{x:100,y:10,z:0} },
+  { buildings: [ {x:10,y:2,z:-5}, {x:20,y:3,z:5}, {x:30,y:4,z:-5}, {x:40,y:5,z:5}, {x:50,y:6,z:0} ], goal:{x:110,y:10,z:0} },
+  { buildings: [ {x:12,y:3,z:-4}, {x:24,y:4,z:4}, {x:36,y:5,z:-4}, {x:48,y:6,z:4}, {x:60,y:7,z:0} ], goal:{x:120,y:10,z:0} },
+  { buildings: [ {x:10,y:2,z:0}, {x:22,y:3,z:-5}, {x:34,y:4,z:5}, {x:46,y:5,z:-5}, {x:58,y:6,z:5}, {x:70,y:7,z:0} ], goal:{x:130,y:10,z:0} }
+];
+
+const levelSelect = document.getElementById("levelSelect");
+const playModeBtn = document.getElementById("playModeBtn");
+const editModeBtn = document.getElementById("editModeBtn");
+const loadLevelBtn = document.getElementById("loadLevelBtn");
+const saveLevelBtn = document.getElementById("saveLevelBtn");
+
+// populate level dropdown
+for (let i = 0; i < levels.length; i++) {
+  const opt = document.createElement("option");
+  opt.value = i;
+  opt.textContent = "Level " + (i + 1);
+  levelSelect.appendChild(opt);
+}
+
+playModeBtn.onclick = () => { mode = "play"; };
+editModeBtn.onclick = () => { mode = "edit"; };
+loadLevelBtn.onclick = () => {
+  currentLevelIndex = parseInt(levelSelect.value, 10);
+  loadLevel(currentLevelIndex);
+};
+saveLevelBtn.onclick = () => {
+  saveCurrentToLevel(currentLevelIndex);
+  alert("Saved to Level " + (currentLevelIndex + 1));
+};
 
 init();
 animate();
@@ -62,15 +132,13 @@ function init() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   document.body.appendChild(renderer.domElement);
 
-  // Lights
   const ambient = new THREE.AmbientLight(0xffffff, 0.5);
   scene.add(ambient);
   const dir = new THREE.DirectionalLight(0xffffff, 0.8);
   dir.position.set(10, 20, 10);
   scene.add(dir);
 
-  // Ground
-  const groundGeo = new THREE.PlaneGeometry(200, 200);
+  const groundGeo = new THREE.PlaneGeometry(400, 200);
   const groundMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.rotation.x = -Math.PI / 2;
@@ -78,41 +146,18 @@ function init() {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // Player (sphere)
   const playerGeo = new THREE.SphereGeometry(playerRadius, 32, 32);
   const playerMat = new THREE.MeshStandardMaterial({ color: 0xff4444 });
   player = new THREE.Mesh(playerGeo, playerMat);
   player.position.set(0, playerRadius + 0.1, 0);
   scene.add(player);
 
-  // Buildings (boxes)
-  const buildingMat = new THREE.MeshStandardMaterial({ color: 0x4444ff });
-  const positions = [
-    { x: 10, y: 2, z: -5 },
-    { x: 20, y: 3, z: 0 },
-    { x: 30, y: 4, z: 5 },
-    { x: 40, y: 5, z: -3 },
-    { x: 25, y: 3, z: -10 }
-  ];
-  positions.forEach((p, i) => {
-    const geo = new THREE.BoxGeometry(4, p.y * 2, 4);
-    const mesh = new THREE.Mesh(geo, buildingMat);
-    mesh.position.set(p.x, p.y, p.z);
-    scene.add(mesh);
-    buildings.push(mesh);
-  });
-
-  // Goal wall (green)
-  const goalGeo = new THREE.BoxGeometry(2, 20, 20);
-  const goalMat = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
-  goalWall = new THREE.Mesh(goalGeo, goalMat);
-  goalWall.position.set(60, 10, 0);
-  scene.add(goalWall);
-
-  // Events
   window.addEventListener("resize", onWindowResize);
   window.addEventListener("mousemove", onMouseMove);
   window.addEventListener("mousedown", onMouseDown);
+  window.addEventListener("contextmenu", e => e.preventDefault());
+
+  loadLevel(0);
 }
 
 function onWindowResize() {
@@ -127,68 +172,163 @@ function onMouseMove(event) {
 }
 
 function onMouseDown(event) {
-  shootRocket();
+  if (mode === "play") {
+    shootRocket();
+  } else if (mode === "edit") {
+    if (event.button === 0) {
+      if (event.shiftKey) {
+        placeGoalAtMouse();
+      } else {
+        placeBuildingAtMouse();
+      }
+    } else if (event.button === 2) {
+      removeBuildingAtMouse();
+    }
+  }
 }
 
 function shootRocket() {
-  // Ray from camera through mouse
   raycaster.setFromCamera(mouse, camera);
   const dir = raycaster.ray.direction.clone().normalize();
-
-  // Explosion pushes opposite direction
-  const force = 40; // strong
+  const force = 40;
   velocity.addScaledVector(dir, -force);
 
-  // Cap speed
   const speed = velocity.length();
   if (speed > maxSpeed) {
     velocity.multiplyScalar(maxSpeed / speed);
   }
 }
 
+function getMouseGroundPoint() {
+  raycaster.setFromCamera(mouse, camera);
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const point = new THREE.Vector3();
+  raycaster.ray.intersectPlane(plane, point);
+  return point;
+}
+
+function placeBuildingAtMouse() {
+  const p = getMouseGroundPoint();
+  if (!p) return;
+  const size = 4;
+  const height = 4 + Math.random() * 4;
+  const geo = new THREE.BoxGeometry(size, height, size);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x4444ff });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(p.x, height / 2, p.z);
+  scene.add(mesh);
+  buildings.push(mesh);
+}
+
+function removeBuildingAtMouse() {
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObjects(buildings, false);
+  if (intersects.length > 0) {
+    const obj = intersects[0].object;
+    scene.remove(obj);
+    buildings = buildings.filter(b => b !== obj);
+  }
+}
+
+function placeGoalAtMouse() {
+  const p = getMouseGroundPoint();
+  if (!p) return;
+  if (goalWall) scene.remove(goalWall);
+  const goalGeo = new THREE.BoxGeometry(2, 20, 20);
+  const goalMat = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+  goalWall = new THREE.Mesh(goalGeo, goalMat);
+  goalWall.position.set(p.x, 10, p.z);
+  scene.add(goalWall);
+}
+
+function loadLevel(index) {
+  // clear old buildings + goal
+  buildings.forEach(b => scene.remove(b));
+  buildings = [];
+  if (goalWall) {
+    scene.remove(goalWall);
+    goalWall = null;
+  }
+
+  const data = levels[index];
+
+  // buildings
+  const buildingMat = new THREE.MeshStandardMaterial({ color: 0x4444ff });
+  data.buildings.forEach(b => {
+    const size = 4;
+    const height = b.y * 2;
+    const geo = new THREE.BoxGeometry(size, height, size);
+    const mesh = new THREE.Mesh(geo, buildingMat);
+    mesh.position.set(b.x, b.y, b.z);
+    scene.add(mesh);
+    buildings.push(mesh);
+  });
+
+  // goal
+  const goalGeo = new THREE.BoxGeometry(2, 20, 20);
+  const goalMat = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+  goalWall = new THREE.Mesh(goalGeo, goalMat);
+  goalWall.position.set(data.goal.x, data.goal.y, data.goal.z);
+  scene.add(goalWall);
+
+  resetPlayer();
+}
+
+function saveCurrentToLevel(index) {
+  const data = { buildings: [], goal: { x: 40, y: 10, z: 0 } };
+
+  buildings.forEach(b => {
+    data.buildings.push({
+      x: b.position.x,
+      y: b.position.y / 2,
+      z: b.position.z
+    });
+  });
+
+  if (goalWall) {
+    data.goal = {
+      x: goalWall.position.x,
+      y: goalWall.position.y,
+      z: goalWall.position.z
+    };
+  }
+
+  levels[index] = data;
+}
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
-
-  updatePhysics(dt);
+  if (mode === "play") {
+    updatePhysics(dt);
+  }
   renderer.render(scene, camera);
 }
 
 function updatePhysics(dt) {
-  // Apply gravity
   velocity.addScaledVector(gravity, dt * 60);
-
-  // Apply velocity
   player.position.addScaledVector(velocity, dt);
-
-  // Friction
   velocity.multiplyScalar(friction);
 
-  // Ground collision
   if (player.position.y - playerRadius < 0) {
     player.position.y = playerRadius;
     if (velocity.y < 0) velocity.y *= -0.4;
   }
 
-  // Building collisions (sphere vs AABB)
   buildings.forEach(b => {
     const half = new THREE.Vector3().setFromMatrixScale(b.matrixWorld).multiplyScalar(0.5);
     const center = b.position.clone();
-
     const closest = new THREE.Vector3(
       clamp(player.position.x, center.x - half.x, center.x + half.x),
       clamp(player.position.y, center.y - half.y, center.y + half.y),
       clamp(player.position.z, center.z - half.z, center.z + half.z)
     );
-
     const diff = player.position.clone().sub(closest);
     const dist = diff.length();
-
     if (dist < playerRadius) {
       const penetration = playerRadius - dist || playerRadius;
       const normal = dist === 0 ? new THREE.Vector3(0, 1, 0) : diff.normalize();
       player.position.addScaledVector(normal, penetration);
-
       const vn = velocity.dot(normal);
       if (vn < 0) {
         velocity.addScaledVector(normal, -vn * 1.4);
@@ -196,13 +336,20 @@ function updatePhysics(dt) {
     }
   });
 
-  // Goal check
-  if (player.position.x > goalWall.position.x - 1) {
-    alert("YOU REACHED THE GOAL WALL! 🎉");
-    resetPlayer();
+  if (goalWall) {
+    const dx = player.position.x - goalWall.position.x;
+    const dz = player.position.z - goalWall.position.z;
+    if (Math.abs(dx) < 2 && Math.abs(dz) < 10 && player.position.y < 20) {
+      alert("Level complete!");
+      resetPlayer();
+      if (currentLevelIndex < levels.length - 1) {
+        currentLevelIndex++;
+        levelSelect.value = currentLevelIndex;
+        loadLevel(currentLevelIndex);
+      }
+    }
   }
 
-  // Camera follow
   const camOffset = new THREE.Vector3(-10, 8, 18);
   const targetPos = player.position.clone().add(camOffset);
   camera.position.lerp(targetPos, 0.1);
@@ -220,3 +367,4 @@ function clamp(v, min, max) {
 </script>
 </body>
 </html>
+
